@@ -1,27 +1,21 @@
 """
 providers.py — LLM provider abstraction.
 
-WHY THIS FILE EXISTS:
-Our V1 was wired directly to Anthropic. You asked: "what if I need to swap?"
-Answer: hide the vendor behind an interface. This file is that interface.
+Hides all vendor-specific API details behind a single interface. agent.py calls
+run_llm_agent() and receives a stream of typed events (TextEvent, ToolCallEvent,
+etc.) without knowing which LLM is underneath.
 
-agent.py talks to ONE thing: the `LLMProvider` class below. It doesn't know
-or care whether we're calling Gemini, Claude, or something else. That's the
-whole point of an abstraction — isolate the part that changes.
+To switch providers, change the PROVIDER constant or set the LLM_PROVIDER env var.
+No other file needs to change.
 
-To switch providers, you change ONE line: the PROVIDER constant below.
-No agent logic changes. No tool schema changes. No UI changes.
+Supported providers:
+- "gemini"    → Google Gemini 2.5 Flash (free tier)
+- "anthropic" → Claude Sonnet 4.6
 
-PROVIDERS SUPPORTED:
-- "gemini"   → Google Gemini 2.5 Flash (FREE tier, recommended for V1)
-- "anthropic" → Claude Sonnet 4.6 (paid, higher quality, easy swap later)
-
-DESIGN NOTE ON TOOL SCHEMAS:
-Our tools.py uses Anthropic's JSON schema format (`input_schema`).
-Gemini expects a very similar format but calls the field `parameters`.
-We convert on the fly in _gemini_build_tools() — tools.py stays provider-agnostic.
-This means when you later write calculate_beta_vs_nifty yourself, you write it
-ONCE in the Anthropic-style format and it just works for both providers.
+Tool schema note:
+tools.py defines schemas in Anthropic's format (input_schema key). Gemini expects
+the same JSON Schema but under a parameters key. _gemini_convert_schema() handles
+this translation, so tools only need to be written once.
 """
 
 import json
@@ -88,30 +82,22 @@ def _gemini_convert_schema(anthropic_schema: dict) -> dict:
 
 def _gemini_build_tools(tool_schemas: list[dict]) -> list:
     """
-    Build the Gemini `tools` argument from our Anthropic-style schemas.
+    Build the Gemini `tools` argument from Anthropic-style schemas.
 
-    Gemini's native 'google_search' is a separate grounding tool — we attach
-    it in addition to our function declarations when web_search is in the list.
+    Skips any web_search schema entries — Gemini's API does not allow combining
+    its built-in google_search grounding with function_declarations in the same
+    request. Web search is available on the Anthropic provider path only.
     """
     from google.genai import types
 
-    # Separate function-calling tools from the server-side web_search
     function_decls = []
-    include_google_search = False
-
     for schema in tool_schemas:
-        # Our Anthropic web_search marker has "type" starting with web_search_
+        # Skip web_search — it uses Anthropic's server-tool format and has no
+        # Gemini equivalent that can be combined with function_declarations.
         if schema.get("type", "").startswith("web_search"):
-            include_google_search = True
             continue
         function_decls.append(_gemini_convert_schema(schema))
 
-    # NOTE: Gemini's API prohibits combining google_search (built-in grounding)
-    # with function_declarations in the same request. Since our function tools
-    # (get_prices, analyze_portfolio) are essential and web search is optional,
-    # we drop google_search for the Gemini path. The Anthropic path still gets
-    # web_search as a server-side tool (handled in _anthropic_run_agent).
-    # V2 option: issue a separate grounding-only call after the tool loop ends.
     tools = []
     if function_decls:
         tools.append(types.Tool(function_declarations=function_decls))
@@ -128,17 +114,13 @@ def _gemini_run_agent(
     max_turns: int,
 ) -> Iterator[Any]:
     """
-    Run the Gemini agent loop.
+    Run the agent loop against the Gemini API.
 
-    Gemini's API is close-but-not-identical to Anthropic's. Key differences:
-      - We use `chat` sessions which maintain history automatically.
-      - Function call parts come as `response.function_calls` (list).
-      - We send results back via `types.Part.from_function_response(...)`.
-      - There's no stop_reason per se; we check if function_calls is non-empty.
-
-    Gemini also has an "automatic function calling" mode where the SDK calls
-    your Python functions for you. We DISABLE it. Why? Because we want to
-    yield events at each step for the UI. Auto mode hides the loop from us.
+    Uses a chat session (history managed automatically) with automatic function
+    calling disabled — we drive the loop manually so we can yield events at each
+    step for the UI. Each turn: extract text and function_call parts, execute any
+    tool calls, send results back as function_response parts, repeat until the
+    model produces a final answer with no function calls.
     """
     from google import genai
     from google.genai import types
@@ -153,7 +135,7 @@ def _gemini_run_agent(
 
     # Seed the conversation with holdings + the user's question.
     initial_msg = (
-        f"Here are my current holdings (mock data for demo):\n"
+        f"Here are my current holdings:\n"
         f"{json.dumps(holdings, indent=2)}\n\n"
         f"My question: {user_message}"
     )
@@ -242,9 +224,9 @@ def _anthropic_run_agent(
     max_turns: int,
 ) -> Iterator[Any]:
     """
-    Claude Sonnet 4.6 via Anthropic SDK. Same loop, different API shape.
-    This is the V1 implementation from our earlier build — kept here for
-    when you want to swap (or A/B test) by setting PROVIDER = 'anthropic'.
+    Claude Sonnet 4.6 via Anthropic SDK. Same loop structure as the Gemini
+    implementation — kept here as an alternative provider. Switch by setting
+    PROVIDER = 'anthropic' or LLM_PROVIDER=anthropic in the environment.
     """
     from anthropic import Anthropic
 
@@ -256,7 +238,7 @@ def _anthropic_run_agent(
     client = Anthropic(api_key=api_key)
 
     initial_content = (
-        f"Here are my current holdings (mock data for demo):\n"
+        f"Here are my current holdings:\n"
         f"{json.dumps(holdings, indent=2)}\n\n"
         f"My question: {user_message}"
     )

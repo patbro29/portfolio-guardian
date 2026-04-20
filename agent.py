@@ -1,26 +1,13 @@
 """
 agent.py — The agent loop (provider-agnostic).
 
-WHAT CHANGED FROM V1:
-Previously this file knew about Anthropic's specific API shape — it called
-client.messages.create directly and handled Anthropic's content-block format.
+This file owns the domain-specific layer of the agent: the system prompt,
+which tools are available, and how many turns the loop is allowed to run.
+All LLM provider details (API calls, message formats, event streaming) live
+in providers.py. The split keeps prompt iteration separate from API plumbing.
 
-Now all provider-specific code lives in providers.py. This file just:
-  1. Defines the system prompt (policy — what the agent SHOULD do)
-  2. Calls run_llm_agent (mechanism — how the loop actually runs)
-  3. Passes events up to the UI
-
-THE AGENT LOOP IS STILL THE SAME IDEA:
-    user msg → LLM decides → calls tool OR replies → loop until done
-The loop logic itself has moved into providers.py because it differs slightly
-between Gemini and Claude (different SDKs, different message formats).
-What STAYS here is the portfolio-domain-specific stuff: prompt, tools, limits.
-
-WHY SPLIT IT THIS WAY?
-Because the prompt and tools are "your product" — they define what Portfolio
-Guardian does. The API plumbing is "your infrastructure" — replaceable.
-Keeping them in different files means when you iterate on the prompt (which
-you will, many times), you're not touching provider code.
+Flow: user message → run_llm_agent (providers.py) → stream of typed events
+→ translated here into simple dicts → consumed by app.py for the UI.
 """
 
 from typing import Any, Generator
@@ -32,7 +19,7 @@ from tools import TOOL_SCHEMAS, execute_tool
 MAX_AGENT_TURNS = 10  # safety cap to prevent runaway tool-use loops
 
 
-SYSTEM_PROMPT = """You are Portfolio Guardian, an AI portfolio analyst for an Indian retail investor.
+SYSTEM_PROMPT = """You are Portfolio Intelligence Dashboard, an AI portfolio analyst for an Indian retail investor.
 
 Tools:
 - get_prices: fetch current market prices. Use .NS suffix for NSE stocks, ^NSEI for NIFTY 50.

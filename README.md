@@ -1,4 +1,4 @@
-# 📊 Portfolio Guardian
+# 📊 Portfolio Intelligence Dashboard
 
 An AI portfolio analyst for Indian retail investors. Upload your NSE holdings, get live P&L vs NIFTY 50, and chat with an agent that fetches prices, scans news, and flags risks.
 
@@ -32,14 +32,14 @@ The agent runs a standard tool-use loop: LLM decides what to call, we execute, f
 - **Python 3.10+** + **Streamlit** for the UI
 - **`google-genai`** SDK with Gemini 2.5 Flash (free) — default
 - **`anthropic`** SDK with Claude Sonnet 4.6 — optional (paid, higher-quality)
-- **yfinance** for NSE market data (V1) — swappable for Kite Connect in V1.5
+- **yfinance** for NSE market data
 - Deployed on **Streamlit Community Cloud** (free tier)
 
 ## Local setup
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/portfolio-guardian.git
-cd portfolio-guardian
+git clone https://github.com/YOUR_USERNAME/portfolio-intelligence-dashboard.git
+cd portfolio-intelligence-dashboard
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
@@ -80,9 +80,9 @@ Use `.NS` suffix for NSE tickers. `^NSEI` is the NIFTY 50 index.
 
 ## Roadmap
 
-- **V1 (current):** Gemini-powered, mock data, yfinance, 3 tools, public Streamlit demo
-- **V1.5:** Kite Connect integration for real holdings (local only — daily-use tool)
-- **V2:** FastAPI microservice for quant math (Monte Carlo VaR, factor regressions, Black-Litterman) called as a new tool. Plus a self-written `calculate_beta_vs_nifty` tool as a learning exercise.
+- **v1.0 (current):** Gemini-powered, mock data, yfinance, 3 tools, public Streamlit demo
+- **v1.5:** Kite Connect integration for real holdings (local only — daily-use tool)
+- **v2.0:** FastAPI microservice for quant math (Monte Carlo VaR, factor regressions) called as a new agent tool
 
 ## Disclaimer
 

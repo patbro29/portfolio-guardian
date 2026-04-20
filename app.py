@@ -1,9 +1,8 @@
 """
-app.py — Streamlit UI for Portfolio Guardian.
+app.py — Streamlit UI for Portfolio Intelligence Dashboard.
 
-Provider-agnostic: reads the current LLM provider from providers.py and
-shows the appropriate API key status. The rest is just the usual Streamlit
-top-to-bottom script with session_state for persistence across reruns.
+Reads the active LLM provider from providers.py and surfaces the appropriate
+API key status. Session state persists holdings and chat history across reruns.
 """
 
 import json
@@ -22,7 +21,7 @@ from tools import get_prices
 # Page config
 # ----------------------------------------------------------------------------
 st.set_page_config(
-    page_title="Portfolio Guardian",
+    page_title="Portfolio Intelligence Dashboard",
     page_icon="📊",
     layout="wide",
 )
@@ -74,7 +73,7 @@ def get_api_key_status() -> tuple[bool, str]:
 # Sidebar
 # ----------------------------------------------------------------------------
 with st.sidebar:
-    st.title("📊 Portfolio Guardian")
+    st.title("📊 Portfolio Intelligence Dashboard")
     st.caption(f"AI portfolio analyst • Running on **{PROVIDER.title()}**")
 
     uploaded = st.file_uploader("Upload your holdings CSV", type=["csv"])
@@ -205,7 +204,7 @@ with col_portfolio:
 
 # ===== RIGHT: Chat with agent =====
 with col_chat:
-    st.subheader("💬 Ask the Guardian")
+    st.subheader("💬 Analyst Chat")
 
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):

@@ -1,21 +1,15 @@
 """
-tools.py — The tools our agent can use.
-
-DESIGN PHILOSOPHY:
-An "agent" in this codebase = an LLM that can decide to call functions.
-Those functions are defined HERE. The LLM doesn't execute them; OUR code does.
-The LLM just says "please call get_prices with tickers=[...]" and we run it.
-
-WHY THIS SEPARATION MATTERS:
-- Tools are the ONLY way the agent touches the outside world.
-- If you want the agent to do something new (e.g. compute Sharpe ratio),
-  you add a tool here. You do NOT retrain the model or tweak prompts endlessly.
-- This is the clean version of "agency" — the LLM reasons, tools act.
+tools.py — The tools the agent can use.
 
 Each tool has two parts:
-1. A TOOL SCHEMA (dict): tells Claude what the tool does, what args it takes.
-   Claude reads this and decides when to call the tool.
-2. An IMPLEMENTATION (function): the actual Python that runs when Claude calls it.
+1. A schema (dict) that describes the tool to the LLM — its name, purpose, and
+   expected arguments. The LLM reads these at inference time to decide which tool
+   to call and with what inputs.
+2. A Python implementation that runs when the agent issues a tool call.
+
+The LLM never executes code directly; it emits structured tool calls and our
+agent loop (providers.py) dispatches them to the functions defined here.
+Adding a new capability means adding a schema + a function — no model changes.
 """
 
 import json
@@ -28,9 +22,8 @@ import yfinance as yf
 # TOOL 1: get_prices
 # ============================================================================
 # Fetches current prices for a list of tickers from Yahoo Finance.
-# Yahoo is flaky for NSE tickers but works ~90% of the time for liquid ones.
-# In V1.5 we swap this implementation for Kite Connect; the SCHEMA stays the same.
-# That's the whole point of tool abstraction — the agent doesn't care who fetches.
+# Yahoo Finance works reliably for liquid NSE tickers; the schema is designed
+# to remain stable if the underlying data source is swapped out in the future.
 
 GET_PRICES_SCHEMA: dict[str, Any] = {
     "name": "get_prices",
@@ -80,10 +73,8 @@ def get_prices(tickers: list[str]) -> dict[str, Any]:
                 "as_of": str(hist.index[-1].date()),
             }
         except Exception as e:
-            # We never raise — we return the error IN the tool result.
-            # Why? Because the AGENT sees the error text and can decide what to do
-            # (retry with different ticker, tell the user, etc.). If we raised,
-            # the agent loop would crash and the user would see a 500.
+            # Errors are returned as structured data rather than raised so the agent
+            # can read them and decide how to proceed (flag to user, skip, etc.).
             results[ticker] = {"error": str(e)}
     return results
 
@@ -91,11 +82,9 @@ def get_prices(tickers: list[str]) -> dict[str, Any]:
 # ============================================================================
 # TOOL 2: analyze_portfolio
 # ============================================================================
-# Pure Python — no external API. Computes portfolio-level risk metrics.
-# WHY THIS IS A SEPARATE TOOL:
-# - We COULD put this math in the system prompt and let Claude do arithmetic.
-# - We DON'T because LLMs are bad at multi-step arithmetic and this is deterministic.
-# - Rule of thumb: if it's math, make it a tool. If it's judgment, let the LLM do it.
+# Pure Python — no external API. Computes portfolio-level P&L and risk metrics.
+# Keeping deterministic calculations in code (rather than relying on the LLM to
+# do arithmetic) produces consistent, auditable results.
 
 ANALYZE_PORTFOLIO_SCHEMA: dict[str, Any] = {
     "name": "analyze_portfolio",
@@ -143,11 +132,9 @@ def analyze_portfolio(
     """
     Compute position-level and portfolio-level metrics.
 
-    Returns a structured dict the LLM can read and reason over. We deliberately
-    include BOTH raw numbers AND pre-computed summaries (top overweight, max
-    sector concentration). The LLM will typically quote these directly rather
-    than re-deriving — and when it re-derives, it gets it wrong. Make the
-    right answer easy to reach.
+    Returns a structured dict with both raw numbers and pre-computed summaries
+    (top overweight, sector concentration). Surfacing derived values directly
+    makes it easier for the LLM to cite specific figures without re-computing.
     """
     positions = []
     total_cost = 0.0
@@ -160,8 +147,6 @@ def analyze_portfolio(
         avg = h["avg_buy_price"]
         sector = h.get("sector", "Unknown")
 
-        # If price is missing (Yahoo failed), we skip it with a note.
-        # The agent will see the note and can flag it to the user.
         price = current_prices.get(ticker)
         if price is None:
             positions.append({
@@ -193,9 +178,7 @@ def analyze_portfolio(
         total_value += value
         sector_values[sector] = sector_values.get(sector, 0.0) + value
 
-    # Second pass: now that we know total_value, compute each position's weight.
-    # Why two passes? Because we need the denominator (total_value) before we
-    # can compute weights. Classic dependency — data needs to settle first.
+    # Second pass: compute weights now that total_value is known.
     for p in positions:
         if "market_value" in p and total_value > 0:
             p["weight_pct"] = round((p["market_value"] / total_value) * 100, 2)
@@ -207,10 +190,7 @@ def analyze_portfolio(
         if total_value > 0
     ]
 
-    # Summary flags — these are judgment calls baked into the tool.
-    # We're saying: if any single stock is >30% of portfolio, flag it.
-    # If any single sector is >40%, flag it. These are reasonable defaults
-    # for a retail Indian equity portfolio. Real PMs use tighter limits.
+    # Flag concentration thresholds: >30% in a single stock, >40% in a single sector.
     valid_positions = [p for p in positions if "weight_pct" in p]
     top_position = max(valid_positions, key=lambda p: p["weight_pct"]) if valid_positions else None
     top_sector = sector_weights[0] if sector_weights else None
@@ -238,18 +218,12 @@ def analyze_portfolio(
 
 
 # ============================================================================
-# TOOL 3: search_news — uses Anthropic's NATIVE web_search tool
+# TOOL 3: web_search — Anthropic's native server-side search tool
 # ============================================================================
-# SPECIAL CASE: web_search is a "server tool" — Anthropic runs it, not us.
-# We don't implement the Python function for this one. We just include the
-# tool SCHEMA in our API call (with a special type) and Anthropic handles it.
-#
-# Advantage: no extra API key, no signup, billed with your Claude usage.
-# Disadvantage: costs per search (~$10 per 1K searches as of 2026).
-#
-# We expose this as its own named tool to Claude so the system prompt can
-# instruct "use search_news for news, use get_prices for prices" — clear lanes.
-# But under the hood, Claude sees it as the standard web_search primitive.
+# This is a server tool: Anthropic executes the search, not our code. We include
+# the schema in the API request and the results come back as part of the response.
+# No separate API key needed; usage is billed with Claude API calls.
+# Only active on the Anthropic provider path — Gemini handles web search differently.
 
 WEB_SEARCH_TOOL: dict[str, Any] = {
     "type": "web_search_20260209",  # 2026 version: dynamic filtering reduces token cost
@@ -259,10 +233,11 @@ WEB_SEARCH_TOOL: dict[str, Any] = {
 
 
 # ============================================================================
-# Tool registry — maps tool names to their Python implementations.
+# Tool registry
 # ============================================================================
-# The agent loop (in agent.py) looks up the name Claude sent and calls the
-# matching function. Note web_search isn't here — Anthropic handles it.
+# Maps tool names to Python implementations. The agent loop dispatches tool
+# calls by looking up the name here. web_search is intentionally excluded —
+# it's a server tool handled by Anthropic, not a local function.
 
 TOOL_IMPLEMENTATIONS = {
     "get_prices": get_prices,
@@ -279,9 +254,9 @@ TOOL_SCHEMAS = [
 
 def execute_tool(name: str, tool_input: dict[str, Any]) -> str:
     """
-    Dispatch a tool call from Claude to our Python implementation.
-    Returns a JSON string because Anthropic's tool_result content blocks
-    expect string content (or a list of content blocks — we keep it simple).
+    Dispatch a tool call to its Python implementation and return a JSON string.
+    Both provider implementations (Gemini and Anthropic) expect string output
+    from tool calls, so we serialize the result here before returning.
     """
     if name not in TOOL_IMPLEMENTATIONS:
         return json.dumps({"error": f"Unknown tool: {name}"})
@@ -290,7 +265,6 @@ def execute_tool(name: str, tool_input: dict[str, Any]) -> str:
         result = TOOL_IMPLEMENTATIONS[name](**tool_input)
         return json.dumps(result, default=str)  # default=str handles dates/etc
     except TypeError as e:
-        # Claude passed wrong args. Return the error so it can try again.
         return json.dumps({"error": f"Bad arguments for {name}: {e}"})
     except Exception as e:
         return json.dumps({"error": f"Tool {name} failed: {e}"})
