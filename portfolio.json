@@ -1,0 +1,14 @@
+{
+  "holdings": [
+    {"ticker": "HDFCBANK.NS", "name": "HDFC Bank", "quantity": 250, "avg_buy_price": 720.0, "sector": "Banking"},
+    {"ticker": "RELIANCE.NS", "name": "Reliance Industries", "quantity": 150, "avg_buy_price": 1200.0, "sector": "Energy/Conglomerate"},
+    {"ticker": "TCS.NS", "name": "Tata Consultancy Services", "quantity": 60, "avg_buy_price": 2450.0, "sector": "IT"},
+    {"ticker": "INFY.NS", "name": "Infosys", "quantity": 120, "avg_buy_price": 1380.0, "sector": "IT"},
+    {"ticker": "NIFTYBEES.NS", "name": "Nippon India NIFTY 50 ETF", "quantity": 450, "avg_buy_price": 245.0, "sector": "Index ETF"}
+  ],
+  "benchmark": "^NSEI",
+  "benchmark_name": "NIFTY 50",
+  "currency": "INR",
+  "owner": "Demo User",
+  "note": "Mock data for public demo. Avg buy prices reflect realistic purchase scenarios vs current market. Real portfolio data is loaded locally only via CSV upload."
+}
